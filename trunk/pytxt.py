@@ -7,23 +7,18 @@
 #
 # tslocum@gmail.com
 # http://www.tj9991.com
-# http://www.kusaba.org
 
 __author__ = 'Trevor Slocum'
-
-THREADS_SHOWN_ON_THREAD_LIST = 200
-
-THREADS_SHOWN_ON_FRONT_PAGE = 10
-REPLIES_SHOWN_ON_FRONT_PAGE = 10
 
 import string
 import cgi
 import wsgiref.handlers
+import Cookie
 import os
 import time
 import datetime
 import re
-import zlib
+import logging
 
 from google.appengine.api import users
 from google.appengine.ext import webapp
@@ -35,22 +30,28 @@ from datetime import datetime
 from hashlib import md5
 from hashlib import sha224
 
+from settings import Settings
+
+Settings._ADMINISTRATOR_VIEW = False
+
 # Set to true if we want to have our webapp print stack traces, etc
 _DEBUG = False
 
 class Page(db.Model):
-  board        = db.CategoryProperty()
-  identifier   = db.StringProperty()
-  contents     = db.BlobProperty()
+  board = db.CategoryProperty()
+  identifier = db.StringProperty()
+  contents = db.BlobProperty()
   
 class UserPrefs(db.Model):
-  user       = db.UserProperty()
-  level      = db.CategoryProperty()
-  posts      = db.IntegerProperty()
+  user = db.UserProperty()
+  level = db.CategoryProperty()
+  posts = db.IntegerProperty(default=0)
+  posts_sage = db.IntegerProperty(default=0)
 
 class Ban(db.Model):
-  ip             = db.StringProperty()
-  reason         = db.StringProperty()
+  ip = db.StringProperty()
+  reason = db.StringProperty()
+  placed = db.DateTimeProperty()
 
 class Board(db.Model):
   directory = db.StringProperty()
@@ -58,24 +59,24 @@ class Board(db.Model):
   description = db.StringProperty()
 
 class Post(db.Model):
-  board          = db.CategoryProperty()
-  parentid       = db.IntegerProperty()
-  author         = db.UserProperty()
-  posts          = db.IntegerProperty()
-  image          = db.BlobProperty(default=None)
-  image_width    = db.IntegerProperty()
-  image_height   = db.IntegerProperty()
-  ip             = db.StringProperty()
-  name           = db.StringProperty()
-  tripcode       = db.StringProperty()
-  email          = db.StringProperty()
-  subject        = db.StringProperty()
-  message        = db.TextProperty()
-  password       = db.StringProperty()
-  date           = db.DateTimeProperty(auto_now_add=True)
+  board = db.CategoryProperty()
+  parentid = db.IntegerProperty()
+  author = db.UserProperty()
+  posts = db.IntegerProperty()
+  image = db.BlobProperty(default=None)
+  image_width = db.IntegerProperty()
+  image_height = db.IntegerProperty()
+  ip = db.StringProperty()
+  name = db.StringProperty()
+  tripcode = db.StringProperty()
+  email = db.StringProperty()
+  subject = db.StringProperty()
+  message = db.TextProperty()
+  date = db.DateTimeProperty()
   date_formatted = db.StringProperty()
-  bumped         = db.DateTimeProperty(auto_now_add=True)
-  deleted        = db.BooleanProperty()
+  nameblock = db.StringProperty()
+  bumped = db.DateTimeProperty()
+  deleted = db.BooleanProperty()
 
 class Thread():
   relid = 0
@@ -108,7 +109,6 @@ class BaseRequestHandler(webapp.RequestHandler):
       url = users.create_login_url(self.request.uri)
       url_linktext = 'Log in'
 
-    # 'administrator': users.is_current_user_admin(),
     values = {
       'request': self.request,
       'user': users.GetCurrentUser(),
@@ -118,6 +118,9 @@ class BaseRequestHandler(webapp.RequestHandler):
       'loggedin': loggedin,
       'administrator': False,
       'application_name': 'PyTXT',
+      'anonymous': Settings.ANONYMOUS,
+      'administrator': users.is_current_user_admin(),
+      'administratorview': Settings._ADMINISTRATOR_VIEW,
     }
     values.update(template_values)
     
@@ -129,13 +132,17 @@ class BaseRequestHandler(webapp.RequestHandler):
     else:
       self.response.out.write(template.render(path, values, debug=_DEBUG))
 
+  def error(self, error):
+    template_values = {
+      'error': error,
+      }
+    self.generate('error.html', template_values)
+    
 class MainPage(BaseRequestHandler):
   def get(self):
-    """board = Board()
-    board.directory = 'p'
-    board.description = 'PyTXT comments and suggestions'
-    board.name = 'PyTXT'
-    board.put()"""
+    if not checkNotBanned(self, self.request.remote_addr):
+      return self.error('You are banned.')
+
     template_values = {
       'boards': Board.all().order('directory')
     }
@@ -146,6 +153,9 @@ class ResPage(BaseRequestHandler):
   def get(self, board, thread='', action=None):
     global _BOARD
     _BOARD = getBoard(board)
+
+    if not checkNotBanned(self, self.request.remote_addr):
+      return self.error('You are banned.')
     
     if not action:
       if thread == '':
@@ -160,6 +170,9 @@ class SubBack(BaseRequestHandler):
   def get(self, board):
     global _BOARD
     _BOARD = getBoard(board)
+
+    if not checkNotBanned(self, self.request.remote_addr):
+      return self.error('You are banned.')
     
     threadlist = getthreadlist(self, True)
     
@@ -174,8 +187,10 @@ class PostToBoard(BaseRequestHandler):
   def post(self):
     global _BOARD
     parent_post = None
-
     _BOARD = getBoard(self.request.get('board'))
+
+    if not checkNotBanned(self, self.request.remote_addr):
+      return self.error('You are banned.')
     
     request_parent = self.request.get('parent')
     if request_parent:
@@ -199,20 +214,32 @@ class PostToBoard(BaseRequestHandler):
        post.posts = 1
 
     post.board = _BOARD.directory
-    
-    post.email    = cgi.escape(self.request.get('email')).strip()
-    post.subject  = cgi.escape(self.request.get('subject')).strip()
-    post.message  = cgi.escape(self.request.get('message')).strip()[0:1000].replace("\n", '<br>')
-    post.password = cgi.escape(self.request.get('password')).strip()
-    post.ip       = str(self.request.remote_addr)
 
+    post.name = cgi.escape(self.request.get('name')).strip()
+    name_match = re.compile(r'(.*)#(.*)').match(post.name)
+    if name_match:
+      if name_match.group(2):
+        post.name = name_match.group(1)
+        post.tripcode = tripcode(name_match.group(2))
+        
+    post.email = cgi.escape(self.request.get('email')).strip()
+    post.subject = cgi.escape(self.request.get('subject')).strip()
+    post.message = cgi.escape(self.request.get('message')).strip()[0:1000].replace("\n", '<br>')
+    post.ip = str(self.request.remote_addr)
+
+    # Set cookies for auto-fill
+    cookie = Cookie.SimpleCookie(self.request.headers.get('Cookie'))
+    cookie['pytxt_name'] = self.request.get('name')
+    if post.email.lower() != 'sage' and post.email.lower() != 'age':
+      cookie['pytxt_email'] = post.email
+    self.response.headers['Set-cookie'] = str(cookie)
+    
     if users.get_current_user():
       current_user = users.get_current_user()
       user_prefs = UserPrefs().all().filter('user = ', current_user)
       user_prefs = user_prefs.get()
       if not user_prefs:
         user_prefs = UserPrefs(user=current_user)
-        user_prefs.posts = 0
       
       post.author = current_user
     
@@ -225,19 +252,20 @@ class PostToBoard(BaseRequestHandler):
     if post.message == '':
       raise Exception, 'Please input a message.'
     
-    if post.password:
-      post.password = sha224(post.password).hexdigest()
-    else:
-      post.password = ''
+    if not checkNotFlooding(self, (post.parentid is not None)):
+      return self.error('Error: Flood detected.')
 
+    post.nameblock = nameBlock(post)
     post.deleted = False
-    
-    post.put()
+    post.date = datetime.now()
     post.date_formatted = post.date.strftime("%y/%m/%d %H:%M:%S")
+    
     post.put()
 
     if users.get_current_user():
       user_prefs.posts += 1
+      if post.email.lower() == 'sage':
+        user_prefs.posts_sage += 1
       user_prefs.put()
     
     if parent_post:
@@ -252,30 +280,72 @@ class PostToBoard(BaseRequestHandler):
     if parent_post:
       self.redirect('/' + _BOARD.directory + '/' + request_parent + '/l50')
     else:
-      self.redirect('/' + _BOARD.directory + '/')
+      self.redirect('/' + _BOARD.directory + '/' + str(post.key()) + '/l50')
+
+class AccountPage(BaseRequestHandler):
+  def get(self):
+    if not checkNotBanned(self, self.request.remote_addr):
+      return self.error('You are banned.')
+    
+    template_values = {}
+    
+    if users.get_current_user():
+      current_user = users.get_current_user()
+      user_prefs = UserPrefs().all().filter('user = ', current_user)
+      user_prefs = user_prefs.get()
+      template_values = {
+        'user_prefs': user_prefs,
+      }
+    
+    self.generate('account.html', template_values)
 
 class AdminPage(BaseRequestHandler):
   def get(self,arg1=None,arg2=None,arg3=None):
+    global _BOARD
     page_text = ''
+    
     if not users.is_current_user_admin():
-      raise Exception, 'You are not authorized to view this page.'
+      return self.error('You are not authorized to view this page.')
+
+    """board = Board()
+    board.directory = 'p'
+    board.description = 'PyTXT comments and suggestions'
+    board.name = 'PyTXT'
+    board.put()"""
+
+    Settings._ADMINISTRATOR_VIEW = True
     
     if arg1:
-      if arg1 == 'delete_thread':
-        posts = Post.all().ancestor(Post.get(arg2))
-        for post in posts:
-          post.delete()
-        page_text += '<h3>Thread removed</h3>'
-      else:
-        if arg1 == 'delete_post':
-          posts = Post.all().ancestor(Post.get(arg2))
-          for post in posts:
-            if str(post.key()) == arg3:
-              post.deleted = True
-              post.put()
-              page_text += '<h3>Post removed</h3>'
+      if arg1 == 'delete':
+        _BOARD = getBoard(arg2)
+        post = Post.get(arg3)
+        if post:
+          deletePost(self, post)
+          page_text += 'Post removed.'
+        else:
+          page_text += 'Error: Post not found.'
+      elif arg1 == 'ban':
+        _BOARD = getBoard(arg2)
+        post = Post.get(arg3)
+        if post:
+          if checkNotBanned(self, post.ip):
+            ban = Ban()
+            ban.ip = post.ip
+            ban.placed = datetime.now()
+            ban.put()
+            page_text += 'Ban placed.'
+          else:
+            page_text += 'That user is already banned.'
+        else:
+          page_text += 'Error: Post not found.'
+      elif arg1 == 'clearcache':
+        pages = Page.all()
+        numpages = pages.count()
+        pages = [page.delete() for page in pages]
+        page_text += 'Page cache cleared: ' + str(numpages) + ' pages deleted.'
     
     template_values = {
+      'title': 'PyTXT Management Panel',
       'page_text': page_text,
       'administrator': users.is_current_user_admin(),
     }
@@ -332,8 +402,7 @@ def getposts(thread_op=None,startat=0,special=None):
     total_threads = Post.all()
     total_threads = total_threads.count()
 
-    op_posts = Post.all().filter('parentid = ', None).filter('board = ', _BOARD.directory).order('-bumped')
-    op_posts = op_posts.fetch(THREADS_SHOWN_ON_FRONT_PAGE)
+    op_posts = Post.all().filter('parentid = ', None).filter('board = ', _BOARD.directory).order('-bumped').fetch(Settings.THREADS_SHOWN_ON_FRONT_PAGE)
 
     thread_relid = 1
     for thread_parent in op_posts:
@@ -343,7 +412,7 @@ def getposts(thread_op=None,startat=0,special=None):
       numposts = posts_total.count()
       fullthread.posts_in_thread = numposts
   
-      offset = max((numposts - REPLIES_SHOWN_ON_FRONT_PAGE), 0)
+      offset = max((numposts - Settings.REPLIES_SHOWN_ON_FRONT_PAGE), 0)
       if offset > 0:
         # Because we aren't showing all of the posts, we need to display the original post first
         thread_starting_post = Post.all().ancestor(thread_parent).order('date')
@@ -353,7 +422,7 @@ def getposts(thread_op=None,startat=0,special=None):
         fullthread.op_id = thread_starting_post.key().id()
         fullthread.op_key = thread_starting_post.key()
 
-      thread = Post.all().ancestor(thread_parent).order('date').fetch(REPLIES_SHOWN_ON_FRONT_PAGE, offset)
+      thread = Post.all().ancestor(thread_parent).order('date').fetch(Settings.REPLIES_SHOWN_ON_FRONT_PAGE, offset)
       
       # Iterate through the posts and give them their relative IDs
       i = (offset + 1)
@@ -369,15 +438,15 @@ def getposts(thread_op=None,startat=0,special=None):
       fullthread.posts = posts
       fullthread.relid = thread_relid
       if thread_relid == 1:
-        fullthread.navlinks = '<a href="#15">&uarr;</a>&nbsp;<a href="#2">&darr;</a>'
+        fullthread.navlinks = u'<a href="#15">▲</a> <a href="#2">▼</a>'
       else:
         if thread_relid == 15:
-          fullthread.navlinks = '<a href="#14">&uarr;</a>&nbsp;<a href="#1">&darr;</a>'
+          fullthread.navlinks = u'<a href="#14">▲</a> <a href="#1">▼</a>'
         else:
-          fullthread.navlinks = '<a href="#' + str(thread_relid - 1) + '">&uarr;</a>&nbsp;<a href="#' + str(thread_relid + 1) + '">&darr;</a>'
+          fullthread.navlinks = '<a href="#' + str(thread_relid - 1) + u'">▲</a> <a href="#' + str(thread_relid + 1) + u'">▼</a>'
           
       if numposts > 0:
-        replieshidden = (numposts - min(len(thread), REPLIES_SHOWN_ON_FRONT_PAGE))
+        replieshidden = (numposts - min(len(thread), Settings.REPLIES_SHOWN_ON_FRONT_PAGE))
         if replieshidden > 0:
           fullthread.replieshidden = replieshidden
       else:
@@ -395,11 +464,11 @@ def getthreadlist(self, full=False):
 
   threadlist_threads = Post.all().filter('parentid = ', None).filter('board = ', _BOARD.directory).order('-bumped')
   if not full:
-    threadlist_threads = threadlist_threads.fetch(THREADS_SHOWN_ON_THREAD_LIST)
+    threadlist_threads = threadlist_threads.fetch(Settings.THREADS_SHOWN_ON_THREAD_LIST)
   
   i = 1
   for thread in threadlist_threads:
-    if not full and i <= THREADS_SHOWN_ON_FRONT_PAGE:
+    if not full and i <= Settings.THREADS_SHOWN_ON_FRONT_PAGE:
       threadlist += '<a href="#' + str(i) + '">' + str(i) + ':</a> <a href="/' + _BOARD.directory + '/' + str(thread.key()) + '/l50">'
     else:
       threadlist += '<a href="/' + _BOARD.directory + '/' + str(thread.key()) + '/l50">' + str(i) + ': '
@@ -437,16 +506,18 @@ def writepage(self, threads, reply_to=None, doreturn=False):
 
 def fetchpage(self, page_name):
   global _BOARD
+  if users.is_current_user_admin() and self.request.get('admin', None) is not None:
+    Settings._ADMINISTRATOR_VIEW = True
   
   if page_name == 'front':
     page = Page.all().filter('identifier = ', page_name).filter('board = ', _BOARD.directory).get()
-    if page:
+    if page and not Settings._ADMINISTRATOR_VIEW:
       page_contents = page.contents
     else:
       page_contents = recachepage(self, page_name)
   else:
     page = Page.all().filter('identifier = ', page_name).filter('board = ', _BOARD.directory).get()
-    if page:
+    if page and not Settings._ADMINISTRATOR_VIEW:
       page_contents = page.contents
     else:
       page_contents = recachepage(self, page_name)
@@ -455,7 +526,8 @@ def fetchpage(self, page_name):
 
 def recachepage(self, page_name):
   global _BOARD
-  
+
+  page_name = str(page_name)
   if page_name == 'front':
     page = Page.all().filter('identifier = ', page_name).filter('board = ', _BOARD.directory).get()
     if not page:
@@ -463,9 +535,6 @@ def recachepage(self, page_name):
       
     threads = getposts(None, 0)
     page_contents = writepage(self, threads, None, True)
-    #page.contents = zlib.compress(page_contents, 1)
-    page.contents = page_contents
-    page.put()
   else:
     page = Page.all().filter('identifier = ', page_name).filter('board = ', _BOARD.directory).get()
     if not page:
@@ -473,35 +542,39 @@ def recachepage(self, page_name):
     
     threads = getposts(page_name, 0)
     page_contents = writepage(self, threads, page_name, True)
-    #page.contents = zlib.compress(page_contents, 1)
+
+  if not Settings._ADMINISTRATOR_VIEW:
     page.contents = page_contents
     page.put()
 
   return page_contents
 
-def threadupdated(self, threadid=None):
-  recachepage(self, 'front')
-  if threadid:
-    post = Post.get(threadid)
-    if post:
-      recachepage(self, threadid)
+def threadupdated(self, thread_key=None):
+  thread_key = str(thread_key)
+  logging.debug('THREADUPDATED: Thread ' + thread_key + ' updated')
+  
+  clearpage('front')
+  if thread_key:
+    clearpage(thread_key)
 
-def clearpage(self, page_name):
+def clearpage(page_name):
   page = Page.all().filter('identifier = ', page_name).filter('board = ', _BOARD.directory).get()
   if page:
     page.delete()
-    
+  
 def tripcode(pw):
-    pw = pw.encode('sjis', 'ignore')	\
-        .replace('"', '&quot;')		\
-        .replace("'", '\'')		\
-        .replace('<', '&lt;')		\
-        .replace('>', '&gt;')		\
-        .replace(',', ',')
-    salt = re.sub(r'[^\.-z]', '.', (pw + 'H..')[1:3])
-    salt = salt.translate(string.maketrans(r':;=?@[\]^_`', 'ABDFGabcdef'))
+  import crypt
+  from crypt import crypt
+  pw = pw.encode('sjis', 'ignore')	\
+    .replace('"', '&quot;')		\
+    .replace("'", '\'')		\
+    .replace('<', '&lt;')		\
+    .replace('>', '&gt;')		\
+    .replace(',', ',')
+  salt = re.sub(r'[^\.-z]', '.', (pw + 'H..')[1:3])
+  salt = salt.translate(string.maketrans(r':;=?@[\]^_`', 'ABDFGabcdef'))
     
-    return crypt(pw, salt, None)[-10:]
+  return crypt(pw, salt)[-10:]
 
 def getBoard(boardname):
   board = None
@@ -513,14 +586,72 @@ def getBoard(boardname):
 
   return board
 
+def checkNotFlooding(self, isreply):
+  if isreply:
+    limit = Settings.SECONDS_BETWEEN_REPLIES
+  else:
+    limit = Settings.SECONDS_BETWEEN_NEW_THREADS
+  
+  post = Post.all().filter('ip = ', self.request.remote_addr).order('-date').get()
+  if post:
+    timedifference = (datetime.now() - post.date)
+    if timedifference.seconds < limit:
+      return False
+
+  return True
+
+def checkNotBanned(self, address):
+  ban = Ban.all().filter('ip = ', address).get()
+  
+  if ban:
+    return False
+
+  return True
+
+def nameBlock(post):
+  nameblock = '<span class="postername">'
+  
+  if post.email:
+    nameblock += '<a href="mailto:' + post.email + '">'
+    
+  if post.name:
+    nameblock += post.name
+  else:
+    if not post.tripcode:
+      nameblock += Settings.ANONYMOUS
+  if post.tripcode:
+    nameblock += '</span><span class="postertrip">' + Settings.POST_TRIPCODE_CHARACTER + post.tripcode
+    
+  if post.email:
+    nameblock += '</a>'
+    
+  nameblock += '</span>'
+    
+  return nameblock
+
+def deletePost(self, post):
+  if post.parentid is None:
+    posts = datamodel.Post.all().ancestor(post)
+    for a_post in posts:
+      a_post.delete()
+
+    threadupdated(self, post.key())
+  else:
+    post.deleted = True
+    post.put()
+
+    threadupdated(self, post.parent().key())
+  
 def real_main():
   global time_start
   time_start = datetime.now()
   application = webapp.WSGIApplication([('/', MainPage),
                                         ('/(.*)/subback', SubBack),
                                         ('/post', PostToBoard),
-                                        (r'/admin/(.*)/([0-9]+)/([0-9]+)', AdminPage),
-                                        (r'/admin/(.*)/([0-9]+)', AdminPage),
+                                        ('/account', AccountPage),
+                                        (r'/admin/(.*)/(.*)/(.*)/(.*)', AdminPage),
+                                        (r'/admin/(.*)/(.*)/(.*)', AdminPage),
+                                        (r'/admin/(.*)/(.*)', AdminPage),
                                         (r'/admin/(.*)', AdminPage),
                                         ('/admin', AdminPage),
                                         (r'/(.*)/(.*)/(.*)', ResPage),
