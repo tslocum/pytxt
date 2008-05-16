@@ -1,0 +1,178 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+  <head>
+    <title>/{{ board }}/ - {{ board_name }} - {{ application_name }}</title>
+    <link rel="stylesheet" href="/static/css/global.css">
+    <link rel="stylesheet" type="text/css" href="/static/css/2ch.css" title="2ch">
+  </head>{% if not replythread %}
+  <body class="board">{% else %}
+  <body class="read">{% endif %}{% if not replythread %}
+    <div class="hborder">
+      <div class="head">
+        <span class="accountlink"><a href="/">Home</a> - <a href="/account">Account</a></span>
+        <span class="navlinks"><a href="#1">&darr;</a>&nbsp;<a href="#menu">&#9632;</a></span>
+        <h1 align="center">
+          {{ board_name }}
+        </h1>
+      </div>
+    </div>
+    <a name="menu" rev="contents"></a>{% if threadlist %}
+    <div class="hborder">
+      <div class="head">
+        <div class="threadldiv" style="padding: 4px;font-size: .8em;">
+          {{ threadlist }}
+          <div class="threadlinks">
+            <a href="/{{ board }}/subback">View Full Thread List</a>
+          </div>
+        </div>
+      </div>
+    </div>{% endif %}
+    <!--<div class="hborder">
+      <div class="head midhead">
+        <b>Style:</b> 
+        <a href="#" onclick="javascript:set_stylesheet('Futatxt',true);return false;">FutaTXT</a>
+        <a href="#" onclick="javascript:set_stylesheet('Buritxt',true);return false;">BuriTXT</a>
+        <a href="#" onclick="javascript:set_stylesheet('Yotsuba',true);return false;">Yotsuba</a>
+        <a href="#" onclick="javascript:set_stylesheet('Headline',true);return false;">Headline</a>
+        <a href="#" onclick="javascript:set_stylesheet('Pseud0ch',true);return false;">Pseud0ch</a>
+      </div>
+    </div>-->{% endif %}{% for thread in threads %}{% if not replythread %}
+    <div class="border">
+      <div class="thread">
+        <a name="{{ thread.relid }}"></a>
+          <span class="navlinks">
+            {{ thread.navlinks }}
+          <a href="#menu">&#9632;</a>
+        </span>
+        <br>{% else %}
+        <span style="float: right;"><a href="/">Home</a> - <a href="/account">Account</a></span>
+        <a href="/{{ board }}/">Front Page</a>&nbsp;&nbsp;<a href="/{{ board }}/{{ thread.op_key }}">All</a>&nbsp;&nbsp;<a href="/{{ board }}/{{ thread.op_key }}/l50">Last 50</a> &nbsp;&nbsp;<a href="/{{ board }}/{{ thread.op_key }}/-100">First 100</a> 
+        <hr class="tophr">{% endif %}{% for post in thread.posts %}{% if post.subject %}
+        <h2>
+          {% if not replythread %}<span class="replies">【{{ thread.relid }}：{{ thread.posts_in_thread }}】</span>{% endif %}{{ post.subject }}
+        </h2><br>{% endif %}
+        <div class="post {% cycle even,odd %}">{% if not post.deleted %}
+          <h3>
+            <span class="postnum">
+            {{ post.relid }} ：</span>{% if post.author %}<span class="loggedin"><span class="loggedinblip">◆</span>{% else %}<span class="postername">{% endif %}{% if post.email %}<a href="mailto:{{ post.email }}">{% endif %}{% if post.author %}{{ post.author }}{% else %}Anonymous{% endif %}{% if post.email %}</a>{% endif %}{% if post.author %}<span class="loggedinblip">◆</span>{% endif %}</span>
+            {{ post.date_formatted }}{% if administrator %}{% if post.parentid %}
+            <a href="/admin/delete_post/{{ post.parentid }}/{{ post.key.id }}">D</a> <a href="/admin/ban/{{ post.key.id }}">B</a>{% else %}
+            <a href="/admin/delete_thread/{{ post.key.id }}">D</a> <a href="/admin/ban/{{ post.key.id }}">B</a>{% endif %}{% endif %}
+          </h3>
+          <blockquote>
+          {{ post.message }}
+          </blockquote>{% else %}
+          <h3>
+            <span class="postnum">
+            {{ post.relid }} ：</span>Deleted
+            {{ post.date_formatted }}
+          </h3>
+          <blockquote>
+          <font color="gray">This post has been deleted.</font>
+          </blockquote>{% endif %}
+        </div>{% endfor %}{% if not replythread %}
+        <form name="postform" id="postform" action="/post" method="post">
+          <input type="hidden" name="board" value="{{ board }}">
+          <input type="hidden" name="parent" value="{{ thread.op_key }}">
+          <table class="postform">
+            <tbody>
+              <tr>
+                <td>
+                  Email:
+                </td>
+                <td>
+                  <input type="text" name="email" size="28" maxlength="75" accesskey="e">
+                </td>
+                <td style="text-align: right;">
+                  <input type="submit" value="Reply" accesskey="z">
+                </td>
+              </tr>
+              <tr>
+                <td class="label">
+                  Message
+                </td>
+                <td colspan="2">
+                  <textarea name="message" cols="60" rows="5" accesskey="m"></textarea>
+                </td>
+              </tr>
+              <!--<tr>
+                <td class="label">
+                  Password
+                </td>
+                <td colspan="2">
+                  <input type="password" name="password" size="8" accesskey="p">&nbsp;(for post deletion)
+                </td>
+              </tr>-->
+              <tr>
+                <td>
+                  &nbsp;
+                </td>
+                <td colspan="2">
+                  <a href="/{{ board }}/{{ thread.op_key }}">All</a>&nbsp;&nbsp;<a href="/{{ board }}/{{ thread.op_key }}/l50">Last 50</a>&nbsp;&nbsp;<a href="/{{ board }}/{{ thread.op_key }}/-100">First 100</a>&nbsp;&nbsp;<a href="#menu">Menu</a>&nbsp;&nbsp;<a href="/{{ board }}/">Refresh</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </form>{% endif %}
+      </div>
+    </div>{% endfor %}{% if not replythread %}
+    <div class="hborder">
+      <div class="head">
+        <div class="newthread">{% else %}
+          <hr>{% endif %}
+          <form name="postform" id="postform" action="/post" method="post">
+            <input type="hidden" name="board" value="{{ board }}">{% if replythread %}
+            <input type="hidden" name="parent" value="{{ replythread }}">{% endif %}
+            <table class="postform">
+              <tbody>{% if not replythread %}
+                <tr>
+                  <td class="label">
+                    Subject:
+                  </td>
+                  <td>
+                    <input type="text" name="subject" size="40" maxlength="75" accesskey="s">
+                  </td>
+                  <td style="text-align: right;">
+                    <input type="submit" value="New Thread" accesskey="z">
+                  </td>
+                </tr>{% endif %}
+                <tr>
+                  <td>
+                    Email:
+                  </td>
+                  <td>
+                    <input type="text" name="email" size="28" maxlength="75" accesskey="e">
+                  </td>
+                  <td style="text-align: right;">{% if replythread %}
+                    <input type="submit" value="Reply" accesskey="z">{% else %}
+                    &nbsp;{% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <td class="label">
+                    Message
+                  </td>
+                  <td colspan="2">
+                    <textarea name="message" cols="60" rows="5" accesskey="m"></textarea>
+                  </td>
+                </tr>
+                <!--<tr>
+                  <td class="label">
+                    Password
+                  </td>
+                  <td colspan="2">
+                    <input type="password" name="password" size="8" accesskey="p">&nbsp;(for post and file deletion)
+                  </td>
+                </tr>-->
+              </tbody>
+            </table>
+          </form>{% if not replythread %}
+        </div>
+      </div>
+    </div>{% endif %}
+    <br>
+    <div class="legal">
+    - PyTXT + kusaba -
+    </div>
+  </body>
+</html>
