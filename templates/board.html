@@ -10,7 +10,7 @@
     <div class="hborder">
       <div class="head">
         <span class="accountlink"><a href="/">Home</a> - <a href="/account">Account</a></span>
-        <span class="navlinks"><a href="#1">&darr;</a>&nbsp;<a href="#menu">&#9632;</a></span>
+        <span class="navlinks"><a href="#menu">■</a>&nbsp;<a href="#1">▼</a></span>
         <h1 align="center">
           {{ board_name }}
         </h1>
@@ -41,8 +41,8 @@
       <div class="thread">
         <a name="{{ thread.relid }}"></a>
           <span class="navlinks">
+            <a href="#menu">■</a>
             {{ thread.navlinks }}
-          <a href="#menu">&#9632;</a>
         </span>
         <br>{% else %}
         <span style="float: right;"><a href="/">Home</a> - <a href="/account">Account</a></span>
@@ -54,10 +54,9 @@
         <div class="post {% cycle even,odd %}">{% if not post.deleted %}
           <h3>
             <span class="postnum">
-            {{ post.relid }} ：</span>{% if post.author %}<span class="loggedin"><span class="loggedinblip">◆</span>{% else %}<span class="postername">{% endif %}{% if post.email %}<a href="mailto:{{ post.email }}">{% endif %}{% if post.author %}{{ post.author }}{% else %}Anonymous{% endif %}{% if post.email %}</a>{% endif %}{% if post.author %}<span class="loggedinblip">◆</span>{% endif %}</span>
-            {{ post.date_formatted }}{% if administrator %}{% if post.parentid %}
-            <a href="/admin/delete_post/{{ post.parentid }}/{{ post.key.id }}">D</a> <a href="/admin/ban/{{ post.key.id }}">B</a>{% else %}
-            <a href="/admin/delete_thread/{{ post.key.id }}">D</a> <a href="/admin/ban/{{ post.key.id }}">B</a>{% endif %}{% endif %}
+            {{ post.relid }} ：</span>{{ post.nameblock }}
+            {{ post.date_formatted }}{% if administratorview %}
+            [<a href="/admin/delete/{{ board }}/{{ post.key }}">D</a> <a href="/admin/ban/{{ board }}/{{ post.key }}">B</a>]{% endif %}
           </h3>
           <blockquote>
           {{ post.message }}
@@ -78,9 +77,11 @@
             <tbody>
               <tr>
                 <td>
-                  Email:
+                  Name:
                 </td>
                 <td>
+                  <input type="text" name="name" size="28" maxlength="75" accesskey="e">
+                  Email:
                   <input type="text" name="email" size="28" maxlength="75" accesskey="e">
                 </td>
                 <td style="text-align: right;">
@@ -95,14 +96,6 @@
                   <textarea name="message" cols="60" rows="5" accesskey="m"></textarea>
                 </td>
               </tr>
-              <!--<tr>
-                <td class="label">
-                  Password
-                </td>
-                <td colspan="2">
-                  <input type="password" name="password" size="8" accesskey="p">&nbsp;(for post deletion)
-                </td>
-              </tr>-->
               <tr>
                 <td>
                   &nbsp;
@@ -138,9 +131,11 @@
                 </tr>{% endif %}
                 <tr>
                   <td>
-                    Email:
+                    Name:
                   </td>
                   <td>
+                    <input type="text" name="name" size="28" maxlength="75" accesskey="e">
+                    Email:
                     <input type="text" name="email" size="28" maxlength="75" accesskey="e">
                   </td>
                   <td style="text-align: right;">{% if replythread %}
@@ -156,23 +151,11 @@
                     <textarea name="message" cols="60" rows="5" accesskey="m"></textarea>
                   </td>
                 </tr>
-                <!--<tr>
-                  <td class="label">
-                    Password
-                  </td>
-                  <td colspan="2">
-                    <input type="password" name="password" size="8" accesskey="p">&nbsp;(for post and file deletion)
-                  </td>
-                </tr>-->
               </tbody>
             </table>
           </form>{% if not replythread %}
         </div>
       </div>
     </div>{% endif %}
-    <br>
-    <div class="legal">
-    - PyTXT + kusaba -
-    </div>
   </body>
 </html>
